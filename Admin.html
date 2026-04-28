@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="description" content="Admin Dashboard for Digital ID">
+  <?!= include('Style'); ?>
+  <style>
+    .admin-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .auth-gate {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 80vh;
+      text-align: center;
+    }
+    .auth-gate input {
+      max-width: 300px;
+      margin-bottom: 1rem;
+      text-align: center;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 3rem;
+    }
+    .stat-card {
+      background: var(--surface-color);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+      text-align: center;
+    }
+    .stat-card h3 {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+    .stat-card .value {
+      font-size: 2.5rem;
+      font-weight: 800;
+      color: var(--text-main);
+    }
+    .dashboard-layout {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 2rem;
+    }
+    @media (min-width: 1024px) {
+      .dashboard-layout {
+        grid-template-columns: 2fr 1fr;
+      }
+    }
+    .section-title {
+      font-size: 1.2rem;
+      margin-bottom: 1rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.5rem;
+    }
+    
+    /* Table */
+    .table-container {
+      overflow-x: auto;
+      background: var(--surface-color);
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+    th, td {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+    th {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    th:hover {
+      color: var(--primary);
+    }
+    
+    /* Activity Feed */
+    .feed-container {
+      background: var(--surface-color);
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      padding: 1rem;
+      max-height: 600px;
+      overflow-y: auto;
+    }
+    .feed-item {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--surface-2-color);
+    }
+    .feed-item.in { background: linear-gradient(90deg, rgba(45,212,191,0.05), transparent); }
+    .feed-item.out { background: linear-gradient(90deg, rgba(251,191,36,0.05), transparent); }
+    
+    .feed-details {
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+
+<!-- AUTH GATE -->
+<div id="authGate" class="auth-gate">
+  <h1 class="title">Admin Access</h1>
+  <p class="subtitle">Please enter the administrative password.</p>
+  <input type="password" id="adminPassword" placeholder="••••••••">
+  <button class="btn-primary" id="loginBtn" style="max-width: 200px;">Log In</button>
+  <p id="authError" style="color: var(--red); margin-top: 1rem; display: none;">Incorrect password</p>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dashboard" class="admin-container" style="display: none;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+    <h1 class="title">Dashboard</h1>
+    <a href="?action=register" style="color: var(--text-muted); text-decoration: none;">&larr; Exit</a>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <h3>Total Registered Users</h3>
+      <div class="value" id="statUsers">--</div>
+    </div>
+    <div class="stat-card">
+      <h3>Total Scans Today</h3>
+      <div class="value" id="statScans">--</div>
+    </div>
+    <div class="stat-card">
+      <h3>Currently IN</h3>
+      <div class="value" id="statIn" style="color: var(--secondary);">--</div>
+    </div>
+    <div class="stat-card">
+      <h3>Currently OUT</h3>
+      <div class="value" id="statOut" style="color: var(--amber);">--</div>
+    </div>
+  </div>
+
+  <div class="dashboard-layout">
+    <div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 class="section-title">Live Attendance</h2>
+        <input type="text" id="searchInput" placeholder="Search users..." style="max-width: 250px; padding: 0.5rem; margin-bottom: 1rem;">
+      </div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th onclick="sortTable(0)">Name</th>
+              <th onclick="sortTable(1)">User ID</th>
+              <th onclick="sortTable(2)">Role / Dept</th>
+              <th onclick="sortTable(3)">Status</th>
+              <th onclick="sortTable(4)">Last Seen</th>
+            </tr>
+          </thead>
+          <tbody id="attendanceTableBody">
+            <!-- Populated via JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div>
+      <h2 class="section-title">Recent Activity Feed</h2>
+      <div class="feed-container" id="feedContainer">
+        <!-- Populated via JS -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API_URL = "YOUR_DEPLOYED_APPS_SCRIPT_URL"; 
+  let ADMIN_TOKEN = null;
+  let attendanceData = [];
+
+  const loginBtn = document.getElementById('loginBtn');
+  const pwdInput = document.getElementById('adminPassword');
+  
+  loginBtn.addEventListener('click', async () => {
+    const pwd = pwdInput.value;
+    if (!pwd) return;
+    
+    loginBtn.disabled = true;
+    document.getElementById('authError').style.display = 'none';
+
+    try {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'adminAuth', password: pwd })
+      });
+      const data = await res.json();
+
+      if (data.authorized) {
+        ADMIN_TOKEN = data.token;
+        document.getElementById('authGate').style.display = 'none';
+        document.getElementById('dashboard').style.display = 'block';
+        loadDashboard();
+        setInterval(loadDashboard, 10000); // refresh every 10s
+      } else {
+        document.getElementById('authError').style.display = 'block';
+      }
+    } catch (err) {
+      document.getElementById('authError').textContent = "Network error";
+      document.getElementById('authError').style.display = 'block';
+    } finally {
+      loginBtn.disabled = false;
+    }
+  });
+
+  async function loadDashboard() {
+    if (!ADMIN_TOKEN) return;
+
+    // Load Stats
+    fetch(`${API_URL}?action=adminStats&token=${ADMIN_TOKEN}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) return;
+        document.getElementById('statUsers').textContent = data.totalUsers;
+        document.getElementById('statScans').textContent = data.scansToday;
+        document.getElementById('statIn').textContent = data.currentlyIn;
+        document.getElementById('statOut').textContent = data.currentlyOut;
+      }).catch(e => console.error(e));
+
+    // Load Logs Feed
+    fetch(`${API_URL}?action=adminLogs&token=${ADMIN_TOKEN}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) return;
+        renderFeed(data);
+      }).catch(e => console.error(e));
+
+    // Load Attendance
+    fetch(`${API_URL}?action=adminAttendance&token=${ADMIN_TOKEN}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) return;
+        attendanceData = data;
+        renderTable(attendanceData);
+      }).catch(e => console.error(e));
+  }
+
+  function getInitials(name) {
+    return name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() || '--';
+  }
+
+  function renderFeed(logs) {
+    const container = document.getElementById('feedContainer');
+    container.innerHTML = '';
+    logs.forEach(log => {
+      const isIN = log.status === 'IN';
+      const timeStr = new Date(log.scannedAt).toLocaleTimeString();
+      const div = document.createElement('div');
+      div.className = `feed-item ${isIN ? 'in' : 'out'}`;
+      
+      div.innerHTML = `
+        <div style="width:32px;height:32px;border-radius:50%;background:var(--surface-2-color);display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:bold;">
+          ${getInitials(log.name)}
+        </div>
+        <div class="feed-details">
+          <div style="font-weight:700;font-size:0.9rem;">${log.name}</div>
+          <div style="font-size:0.75rem;color:var(--text-muted);">${log.role}</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="badge ${isIN ? 'in' : 'out'}">${log.status}</div>
+          <div class="mono" style="font-size:0.7rem;color:var(--text-muted);margin-top:0.2rem;">${timeStr}</div>
+        </div>
+      `;
+      container.appendChild(div);
+    });
+  }
+
+  function renderTable(data) {
+    const tbody = document.getElementById('attendanceTableBody');
+    tbody.innerHTML = '';
+    data.forEach(user => {
+      let badgeClass = 'invalid'; // grey for NOT ARRIVED
+      if (user.status === 'IN') badgeClass = 'in';
+      if (user.status === 'OUT') badgeClass = 'out';
+      
+      let lastSeenStr = user.lastSeen;
+      if (lastSeenStr !== '—') lastSeenStr = new Date(lastSeenStr).toLocaleString();
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td style="font-weight:bold;">${user.name}</td>
+        <td class="mono" style="font-size:0.85rem;color:var(--primary);">${user.userId}</td>
+        <td style="font-size:0.85rem;color:var(--text-muted);">${user.role} <br/> <span style="opacity:0.7">${user.department}</span></td>
+        <td><span class="badge ${badgeClass}">${user.status}</span></td>
+        <td class="mono" style="font-size:0.8rem;color:var(--text-muted);">${lastSeenStr}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  document.getElementById('searchInput').addEventListener('input', (e) => {
+    const term = e.target.value.toLowerCase();
+    const filtered = attendanceData.filter(u => 
+      u.name.toLowerCase().includes(term) || 
+      u.userId.toLowerCase().includes(term) ||
+      u.department.toLowerCase().includes(term)
+    );
+    renderTable(filtered);
+  });
+
+  let sortCol = -1;
+  let sortAsc = true;
+  function sortTable(colIdx) {
+    if (sortCol === colIdx) {
+      sortAsc = !sortAsc;
+    } else {
+      sortCol = colIdx;
+      sortAsc = true;
+    }
+
+    const sorted = [...attendanceData].sort((a, b) => {
+      let valA, valB;
+      switch(colIdx) {
+        case 0: valA = a.name; valB = b.name; break;
+        case 1: valA = a.userId; valB = b.userId; break;
+        case 2: valA = a.role; valB = b.role; break;
+        case 3: valA = a.status; valB = b.status; break;
+        case 4: valA = a.lastSeen; valB = b.lastSeen; break;
+      }
+      if (valA < valB) return sortAsc ? -1 : 1;
+      if (valA > valB) return sortAsc ? 1 : -1;
+      return 0;
+    });
+
+    renderTable(sorted);
+  }
+
+</script>
+
+</body>
+</html>

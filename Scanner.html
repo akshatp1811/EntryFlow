@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <?!= include('Style'); ?>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    /* Hide html5-qrcode's injected UI to keep our custom brackets */
+    #viewfinder-container > img,
+    #viewfinder-container > div[style] {
+      display: none !important;
+    }
+    .viewfinder {
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .toast {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-20px);
+      padding: 1rem 1.5rem;
+      border-radius: 8px;
+      color: #fff;
+      font-weight: 700;
+      opacity: 0;
+      transition: all 0.3s ease;
+      z-index: 1000;
+      pointer-events: none;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    .toast.warning { background: var(--amber); color: #000; }
+    .toast.error { background: var(--red); color: #000; }
+
+    .full-screen-error {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--bg-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      text-align: center;
+      padding: 2rem;
+    }
+    .full-screen-error.hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<div class="scanner-container">
+  <!-- Top Bar -->
+  <div class="top-bar">
+    <div class="app-brand">DigitalID</div>
+    <div class="clock-display mono" id="live-clock">Tuesday, 29 April 2025 · 11:05:32</div>
+    <div class="status-indicator">
+      <div class="status-dot"></div>
+      Ready to Scan
+    </div>
+  </div>
+
+  <!-- Camera Error State -->
+  <div id="cameraErrorState" class="full-screen-error hidden">
+    <div style="width:64px; height:64px; border: 2px solid var(--red); border-radius: 8px; display:flex; align-items:center; justify-content:center; margin-bottom: 1rem; color: var(--red); font-weight: bold; font-size: 2rem;">!</div>
+    <h2 style="margin-bottom: 1rem;">Camera Access Required</h2>
+    <p style="color: var(--text-muted); margin-bottom: 2rem;">Please allow camera permissions to use the scanner.</p>
+    <button class="btn-primary" style="max-width: 200px;" onclick="location.reload()">Retry</button>
+  </div>
+
+  <!-- Viewfinder -->
+  <div class="viewfinder-container">
+    <div class="viewfinder" id="viewfinder-container">
+      <div class="bracket tl"></div>
+      <div class="bracket tr"></div>
+      <div class="bracket bl"></div>
+      <div class="bracket br"></div>
+      <div class="scan-line"></div>
+    </div>
+    
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem;">Align QR code within frame</p>
+    
+    <!-- DEV ONLY — remove before final submission -->
+    <input id="dev-scan-input" type="text" placeholder="Paste QR JSON here" style="display:none; width: 80%; max-width: 300px; padding: 0.5rem; background: var(--surface-2-color); border: 1px solid var(--border-color); color: white; margin-bottom: 1rem;" />
+    <button id="dev-scan-btn" class="btn-secondary" style="display:none; min-width: 150px;">Simulate Scan</button>
+    
+    <a href="?action=register" style="display:block; margin-top:1rem; color:var(--text-muted); font-size:0.8rem; text-decoration:none;">&larr; Back to Register</a>
+  </div>
+
+  <!-- Result Card -->
+  <div class="result-card" id="resultCard">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.5rem;">
+      <div>
+        <h3 id="resName" style="font-size: 1.3rem; margin-bottom: 0.2rem;">--</h3>
+        <p id="resRole" style="color: var(--text-muted); font-size: 0.85rem;">--</p>
+      </div>
+      <span class="badge" id="resStatusBadge">--</span>
+    </div>
+    <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
+      <p class="mono" id="resId" style="color: var(--primary); font-size: 0.9rem; margin-bottom: 0.3rem;">--</p>
+      <p class="mono" id="resTime" style="color: var(--text-muted); font-size: 0.8rem;">--</p>
+    </div>
+  </div>
+
+  <!-- Logs Strip -->
+  <div class="logs-strip" id="logsStrip">
+    <!-- Populated via JS -->
+  </div>
+</div>
+
+<div class="toast" id="toastBox"></div>
+
+<script>
+  const API_URL = "YOUR_DEPLOYED_APPS_SCRIPT_URL"; 
+
+  // Clock
+  function updateClock() {
+    const now = new Date();
+    const options = {
+      weekday: 'long', day: 'numeric',
+      month: 'long', year: 'numeric'
+    };
+    const datePart = now.toLocaleDateString('en-IN', options);
+    const timePart = now.toTimeString().split(' ')[0];
+    document.getElementById('live-clock').textContent = `${datePart} · ${timePart}`;
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  // Toast
+  const toastBox = document.getElementById('toastBox');
+  function showToast(message, type) {
+    toastBox.textContent = message;
+    toastBox.className = `toast show ${type}`;
+    setTimeout(() => {
+      toastBox.classList.remove('show');
+    }, 2000);
+  }
+
+  // Result Card Management
+  const resultCard = document.getElementById('resultCard');
+  let hideTimeout;
+
+  function showResultCard(status, data) {
+    const { name, role, userId, timestamp, message } = data;
+    
+    document.getElementById('resName').textContent = name || "Unknown";
+    document.getElementById('resRole').textContent = role || "N/A";
+    document.getElementById('resId').textContent = userId || "--";
+    
+    if (timestamp) {
+      document.getElementById('resTime').textContent = new Date(timestamp).toLocaleTimeString();
+    } else {
+      document.getElementById('resTime').textContent = "--";
+    }
+    
+    const badge = document.getElementById('resStatusBadge');
+    badge.textContent = status;
+    badge.className = `badge ${status.toLowerCase()}`;
+    
+    // For INVALID, display reason in the name slot
+    if (status === 'INVALID') {
+      document.getElementById('resName').textContent = message || "Scan Error";
+      document.getElementById('resRole').textContent = "";
+      document.getElementById('resId').textContent = "";
+    }
+    
+    resultCard.className = `result-card status-${status.toLowerCase()}`;
+    resultCard.classList.add('show');
+    
+    clearTimeout(hideTimeout);
+    hideTimeout = setTimeout(() => {
+      resultCard.classList.remove('show');
+      scanCooldown = false; // reset cooldown when card dismisses
+    }, 3000);
+  }
+
+  // Decode QR
+  function decodeQRPayload(rawString) {
+    try {
+      const payload = JSON.parse(rawString);
+      const required = ['userId', 'name', 'role', 'issued'];
+
+      for (const field of required) {
+        if (!payload[field]) {
+          return { valid: false, reason: "Incomplete QR data" };
+        }
+      }
+
+      // Format check — userId must match ANT-YYYYMMDD-XXXX
+      const idPattern = /^ANT-\d{8}-[A-Z0-9]{4}$/;
+      if (!idPattern.test(payload.userId)) {
+        return { valid: false, reason: "Invalid ID format" };
+      }
+
+      // Expiry check — QR valid for 365 days from issued date
+      const issued = new Date(payload.issued);
+      const now = new Date();
+      const daysDiff = (now - issued) / (1000 * 60 * 60 * 24);
+      if (daysDiff > 365) {
+        return { valid: false, reason: "QR code has expired" };
+      }
+
+      return { valid: true, payload };
+
+    } catch (e) {
+      return { valid: false, reason: "Unreadable QR code" };
+    }
+  }
+
+  // Scanner Logic
+  let scanCooldown = false;
+  let lastScannedId = null;
+
+  async function onScanSuccess(decodedText) {
+    if (scanCooldown) return;
+    scanCooldown = true;
+
+    const decoded = decodeQRPayload(decodedText);
+    
+    if (!decoded.valid) {
+      showResultCard('INVALID', { message: decoded.reason });
+      return;
+    }
+
+    // Call API
+    try {
+      const payload = decoded.payload;
+      payload.action = 'scan';
+
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+
+      if (data.status === 'DUPLICATE') {
+        showToast("Already scanned. Please wait a moment.", "warning");
+        setTimeout(() => { scanCooldown = false; }, 2000);
+      } else if (data.status === 'INVALID') {
+        showResultCard('INVALID', { message: data.message });
+      } else {
+        showResultCard(data.status, data);
+        prependLogToStrip(data); // update log strip immediately
+      }
+
+    } catch (err) {
+      console.error(err);
+      showResultCard('INVALID', { message: "Network Error" });
+    }
+  }
+
+  function onScanError(err) {
+    // html5-qrcode fires this continuously on every frame without a QR code. Ignore it.
+  }
+
+  // Init Camera
+  const scanner = new Html5Qrcode("viewfinder-container");
+  
+  scanner.start(
+    { facingMode: "environment" },
+    { fps: 10, qrbox: { width: 260, height: 260 } },
+    onScanSuccess,
+    onScanError
+  ).catch(err => {
+    console.error("Camera start failed", err);
+    if (err.includes && err.includes("NotAllowedError") || String(err).includes("permission")) {
+      document.getElementById('cameraErrorState').classList.remove('hidden');
+    } else {
+      showToast("Camera error. Please refresh.", "error");
+    }
+  });
+
+  // Logs Strip Polling
+  const logsStrip = document.getElementById('logsStrip');
+  
+  function prependLogToStrip(log) {
+    const timeStr = new Date(log.timestamp || log.scannedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const badgeClass = log.status.toLowerCase();
+    
+    const pill = document.createElement('div');
+    pill.className = 'log-pill';
+    pill.innerHTML = `
+      <span style="font-weight:700">${log.name}</span>
+      <span class="badge ${badgeClass}" style="font-size:0.6rem; padding:0.1rem 0.4rem;">${log.status}</span>
+      <span class="mono" style="color:var(--text-muted); font-size:0.75rem;">${timeStr}</span>
+    `;
+    logsStrip.prepend(pill);
+  }
+
+  function renderLogs(logs) {
+    logsStrip.innerHTML = '';
+    logs.forEach(log => prependLogToStrip(log));
+  }
+
+  async function fetchLogs() {
+    try {
+      const res = await fetch(`${API_URL}?action=logs`);
+      const data = await res.json();
+      if (data.success && data.logs) {
+        // Since we prepend, we want to iterate from oldest to newest if the array is [newest...oldest]
+        // The API returns reverse() so the first element is the newest.
+        // Let's reverse it back so we prepend the oldest first, making newest end up at the very front.
+        renderLogs([...data.logs].reverse());
+      }
+    } catch (err) {
+      console.error("Failed to fetch logs", err);
+    }
+  }
+
+  // Poll every 5s
+  setInterval(fetchLogs, 5000);
+  fetchLogs(); // initial fetch
+
+  // Dev Mode Toggle (Ctrl+Shift+D)
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+      const devInput = document.getElementById('dev-scan-input');
+      const devBtn = document.getElementById('dev-scan-btn');
+      const isHidden = devInput.style.display === 'none';
+      devInput.style.display = isHidden ? 'block' : 'none';
+      devBtn.style.display = isHidden ? 'block' : 'none';
+    }
+  });
+
+  document.getElementById('dev-scan-btn').addEventListener('click', () => {
+    const val = document.getElementById('dev-scan-input').value;
+    if(val) onScanSuccess(val);
+  });
+
+</script>
+
+</body>
+</html>
