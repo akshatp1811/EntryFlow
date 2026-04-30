@@ -184,7 +184,7 @@
 </div>
 
 <script>
-  const API_URL = "YOUR_DEPLOYED_APPS_SCRIPT_URL"; 
+  const API_URL = "<?= ScriptApp.getService().getUrl() ?>";
   let ADMIN_TOKEN = null;
   let attendanceData = [];
 

@@ -1,109 +1,96 @@
+
 /**
- * Generates a unique ANT-format userId, checks for collisions in Users sheet
- * @returns {string} Unique User ID
+ * Registers a new user in the Users sheet.
+ * @param {Object} params - Registration payload
+ * @returns {Object} Result object
  */
-function generateUserId() {
+function registerUser(params) {
+  const { name, email, role, department } = params;
+
+  if (!name || !email || !role || !department) {
+    return { success: false, message: "Missing required fields" };
+  }
+
+  // Check for duplicate email
+  const existing = findUserByEmail(email);
+  if (existing) {
+    return { success: false, code: "DUPLICATE_EMAIL", message: "Email already registered" };
+  }
+
+  // Generate userId: ANT-YYYYMMDD-XXXX
   const dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd");
-  const prefix = `ANT-${dateStr}`;
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  
-  for (let attempt = 0; attempt < 10; attempt++) {
-    let suffix = '';
-    for (let i = 0; i < 4; i++) {
-      suffix += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    const candidateId = `${prefix}-${suffix}`;
-    
-    // Collision check
-    if (!findUserById(candidateId)) {
-      return candidateId;
-    }
+  const chars   = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let suffix    = '';
+  for (let i = 0; i < 4; i++) {
+    suffix += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-  
-  throw new Error("ID generation failed after 10 attempts");
-}
+  const userId  = `ANT-${dateStr}-${suffix}`;
+  const issued  = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
 
-/**
- * Registers a new user, checks for duplicate emails, and saves to Users sheet.
- * @param {Object} data - User registration details
- * @returns {Object} Result payload
- */
-function registerUser(data) {
-  if (!data.name || !data.email || !data.role || !data.department) {
-    return { success: false, message: "All fields are required" };
-  }
-
-  // Check duplicate email
-  if (findUserByEmail(data.email)) {
-    return { success: false, message: "Email already registered", code: "DUPLICATE_EMAIL" };
-  }
-
-  const userId = generateUserId();
-  const issuedTime = new Date().toISOString();
-
-  // Build row (qrDriveId and qrFileUrl are empty for now)
-  // Headers: userId | name | email | role | department | qrDriveId | qrFileUrl | createdAt
-  const rowData = [
+  appendUserRow([
     userId,
-    data.name,
-    data.email,
-    data.role,
-    data.department,
-    "",
-    "",
-    issuedTime
-  ];
+    name,
+    email,
+    role,
+    department,
+    '',   // qrDriveId — filled later by saveQRToDrive
+    '',   // qrFileUrl — filled later by saveQRToDrive
+    new Date().toISOString()
+  ]);
 
-  appendUserRow(rowData);
-
-  return { 
-    success: true, 
-    userId: userId, 
-    name: data.name, 
-    role: data.role,
-    issued: issuedTime,
-    message: "User registered successfully"
-  };
+  return { success: true, userId, name, role, department, issued };
 }
 
 /**
- * Decodes a base64 QR code and saves it to Google Drive as a PNG.
- * @param {Object} data - Contains userId and base64Image
- * @returns {Object} Result containing Drive URL
+ * Saves a base64 QR code image to Google Drive and updates the user row.
+ * @param {Object} params - { userId, base64Image }
+ * @returns {Object} Result object
  */
-function saveQRToDrive(data) {
-  const { userId, base64Image } = data;
+function saveQRToDrive(params) {
+  const { userId, base64Image } = params;
+
   if (!userId || !base64Image) {
-    return { success: false, message: "Missing userId or base64Image" };
+    return { success: false, message: "Missing userId or image data" };
   }
 
-  const folderId = PropertiesService.getScriptProperties().getProperty('QR_FOLDER_ID');
-  if (!folderId) {
-    throw new Error("QR_FOLDER_ID not set in Script Properties");
+  try {
+    // Decode base64 — strip data URI prefix if present
+    const base64Data = base64Image.replace(/^data:image\/png;base64,/, '');
+    const decoded    = Utilities.base64Decode(base64Data);
+    const blob       = Utilities.newBlob(decoded, 'image/png', `${userId}.png`);
+
+    // Save to Drive root (or specify a folder ID if needed)
+    const file    = DriveApp.createFile(blob);
+    const fileId  = file.getId();
+    const fileUrl = file.getUrl();
+
+    // Make the file publicly viewable
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    // Update user row columns 6 (qrDriveId) and 7 (qrFileUrl)
+    updateUserRow(userId, 6, fileId);
+    updateUserRow(userId, 7, fileUrl);
+
+    return { success: true, fileId, fileUrl };
+
+  } catch (err) {
+    return { success: false, message: err.message };
   }
+}
 
-  // Extract base64 data and decode
-  const base64Data = base64Image.split(',')[1] || base64Image;
-  const blob = Utilities.newBlob(
-    Utilities.base64Decode(base64Data),
-    'image/png',
-    userId + '.png'
-  );
+/**
+ * Generates a QR code image server-side and returns it as a base64 data URL.
+ * Called from the client via google.script.run — avoids CDN/CSP issues entirely.
+ * @param {string} jsonPayload - JSON string to encode in the QR
+ * @returns {string} base64 PNG data URL
+ */
+function generateQRBase64(jsonPayload) {
+  const encodedData = encodeURIComponent(jsonPayload);
+  const url = 'https://api.qrserver.com/v1/create-qr-code/?size=200x200&format=png&ecc=H&data=' + encodedData;
 
-  const folder = DriveApp.getFolderById(folderId);
-  const file = folder.createFile(blob);
-  
-  // Make publicly accessible
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  
-  const fileUrl = file.getUrl();
-  const driveId = file.getId();
+  const response = UrlFetchApp.fetch(url);
+  const blob = response.getBlob();
+  const base64 = Utilities.base64Encode(blob.getBytes());
 
-  // Update Users sheet
-  // Headers: userId | name | email | role | department | qrDriveId | qrFileUrl | createdAt
-  // qrDriveId is column 6, qrFileUrl is column 7
-  updateUserRow(userId, 6, driveId);
-  updateUserRow(userId, 7, fileUrl);
-
-  return { success: true, qrFileUrl: fileUrl, qrDriveId: driveId };
+  return 'data:image/png;base64,' + base64;
 }

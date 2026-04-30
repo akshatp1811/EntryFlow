@@ -3,9 +3,7 @@
  * @returns {Sheet} Users sheet object
  */
 function getUsersSheet() {
-  const ss = SpreadsheetApp.openById(
-    PropertiesService.getScriptProperties().getProperty('SHEET_ID')
-  );
+  const ss = SpreadsheetApp.openById('1B6rxyR9pLBvc7veGrbNntrOsCAVRYyRH1lntAubSFTU');
   return ss.getSheetByName('Users');
 }
 
@@ -14,9 +12,7 @@ function getUsersSheet() {
  * @returns {Sheet} Logs sheet object
  */
 function getLogsSheet() {
-  const ss = SpreadsheetApp.openById(
-    PropertiesService.getScriptProperties().getProperty('SHEET_ID')
-  );
+  const ss = SpreadsheetApp.openById('1B6rxyR9pLBvc7veGrbNntrOsCAVRYyRH1lntAubSFTU');
   return ss.getSheetByName('Logs');
 }
 
@@ -89,7 +85,7 @@ function getLastLogForUser(userId) {
   // Skip header row, collect all rows for this user
   const userLogs = data
     .slice(1)
-    .filter(row => row[1] === userId);  // col index 1 = userId
+    .filter(row => row[1] === userId); // col index 1 = userId
 
   if (userLogs.length === 0) return null;
 

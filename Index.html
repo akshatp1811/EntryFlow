@@ -1,291 +1,245 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <base target="_top">
-  <meta name="description" content="Digital ID Registration System">
-  <?!= include('Style'); ?>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <style>
-    .error-msg {
-      color: var(--red);
-      font-size: 0.8rem;
-      margin-top: 0.5rem;
-      display: none;
+/**
+ * Handles incoming GET requests to serve HTML pages or read data.
+ */
+function doGet(e) {
+  let callback = null;
+
+  try {
+    const action = e && e.parameter && e.parameter.action;
+    callback = e && e.parameter && e.parameter.callback;
+
+    function respondMaybeJsonp(data) {
+      if (callback) {
+        return ContentService
+          .createTextOutput(callback + '(' + JSON.stringify(data) + ')')
+          .setMimeType(ContentService.MimeType.JAVASCRIPT);
+      }
+      return respond(data);
     }
-    .error-msg.show {
-      display: block;
+
+    // Default: serve main page
+    if (!action) {
+      return HtmlService.createTemplateFromFile('Index')
+        .evaluate()
+        .setTitle('Register | Digital ID')
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+        .addMetaTag('viewport', 'width=device-width, initial-scale=1');
     }
-    .toast {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      padding: 1rem 1.5rem;
-      border-radius: 8px;
-      color: #fff;
-      font-weight: 700;
-      opacity: 0;
-      transform: translateY(20px);
-      transition: all 0.3s ease;
-      z-index: 1000;
-      pointer-events: none;
+
+
+    if (action === 'admin') {
+      return HtmlService.createTemplateFromFile('Admin')
+        .evaluate()
+        .setTitle('Admin | Digital ID')
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+        .addMetaTag('viewport', 'width=device-width, initial-scale=1');
     }
-    .toast.show {
-      opacity: 1;
-      transform: translateY(0);
+
+    // API: logs
+    if (action === 'logs') {
+      const logs = getLogsFromClient();
+      return respondMaybeJsonp({ success: true, logs });
     }
-    .toast.success { background: var(--secondary); color: #000; }
-    .toast.warning { background: var(--amber); color: #000; }
-    .toast.error { background: var(--red); }
-  </style>
-</head>
-<body>
 
-<div style="position:absolute; top:1rem; right:1rem; z-index:100;">
-  <a href="?action=admin" target="_blank" style="color:var(--text-muted); font-size:0.8rem; text-decoration:none; opacity:0.5;">Admin</a>
-</div>
-
-<div class="split-layout">
-  <!-- Form Section -->
-  <div class="form-section">
-    <h1 class="title">Digital ID</h1>
-    <p class="subtitle">Register to generate your unique entry pass.</p>
-
-    <form id="registerForm">
-      <div class="form-group">
-        <label for="fullName">Full Name</label>
-        <input type="text" id="fullName" placeholder="e.g. Jane Doe" required>
-        <div class="error-msg" id="err-fullName">This field is required</div>
-      </div>
-
-      <div class="form-group">
-        <label for="email">Email Address</label>
-        <input type="email" id="email" placeholder="jane@example.com" required>
-        <div class="error-msg" id="err-email">This field is required</div>
-      </div>
-
-      <div class="form-group">
-        <label for="role">Role</label>
-        <input type="text" id="role" placeholder="e.g. Developer" required>
-        <div class="error-msg" id="err-role">This field is required</div>
-      </div>
-
-      <div class="form-group">
-        <label for="department">Department</label>
-        <select id="department" required>
-          <option value="" disabled selected>Select your department...</option>
-          <option value="Engineering">Engineering</option>
-          <option value="Design">Design</option>
-          <option value="Marketing">Marketing</option>
-          <option value="Operations">Operations</option>
-          <option value="HR">HR</option>
-          <option value="Other">Other</option>
-        </select>
-        <div class="error-msg" id="err-department">This field is required</div>
-      </div>
-
-      <div class="form-group">
-        <button type="submit" class="btn-primary" id="submitBtn">Generate My ID</button>
-      </div>
-    </form>
-    
-    <div style="margin-top: 1rem; text-align: center; opacity: 0; animation: slideUp 0.6s ease forwards; animation-delay: 0.36s;">
-        <a href="?action=scanner" style="color: var(--text-muted); font-size: 0.9rem;">Go to Scanner Interface &rarr;</a>
-    </div>
-  </div>
-
-  <!-- Preview Section -->
-  <div class="preview-section">
-    <div class="id-card" id="idCard">
-      <div class="avatar" id="avatarInitials">--</div>
-      <h2 class="card-name" id="cardName">John Doe</h2>
-      <p class="card-role" id="cardRole">Engineering</p>
-      
-      <div class="card-id-text mono" id="cardIdText">ANT-00000000-0000</div>
-      
-      <div class="qr-box" id="qrContainer">
-        <span>QR Code</span>
-      </div>
-
-      <div class="card-actions">
-        <button class="btn-secondary" id="downloadBtn" disabled title="Available after generation">Download QR</button>
-        <button class="btn-secondary" id="copyBtn">Copy ID</button>
-      </div>
-      
-      <div class="card-accent-strip"></div>
-    </div>
-  </div>
-</div>
-
-<div class="toast" id="toastBox"></div>
-
-<script>
-  const API_URL = "YOUR_DEPLOYED_APPS_SCRIPT_URL"; 
-
-  const registerForm = document.getElementById('registerForm');
-  const submitBtn = document.getElementById('submitBtn');
-  const idCard = document.getElementById('idCard');
-  
-  const cardName = document.getElementById('cardName');
-  const cardRole = document.getElementById('cardRole');
-  const cardIdText = document.getElementById('cardIdText');
-  const avatarInitials = document.getElementById('avatarInitials');
-  const copyBtn = document.getElementById('copyBtn');
-  const downloadBtn = document.getElementById('downloadBtn');
-  const qrContainer = document.getElementById('qrContainer');
-  const toastBox = document.getElementById('toastBox');
-
-  let currentQrBase64 = null;
-  let generatedUserId = null;
-
-  function getInitials(name) {
-    return name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() || '--';
-  }
-
-  function showToast(message, type) {
-    toastBox.textContent = message;
-    toastBox.className = `toast show ${type}`;
-    setTimeout(() => {
-      toastBox.classList.remove('show');
-    }, 4000);
-  }
-
-  function showError(fieldId, msg) {
-    const el = document.getElementById(`err-${fieldId}`);
-    if (el) {
-      el.textContent = msg;
-      el.classList.add('show');
+    // API: scan
+    if (action === 'scan') {
+      const result = handleScan({
+        userId: e.parameter.userId,
+        name:   e.parameter.name,
+        role:   e.parameter.role,
+        issued: e.parameter.issued
+      });
+      return respondMaybeJsonp(result);
     }
-  }
 
-  function clearErrors() {
-    document.querySelectorAll('.error-msg').forEach(el => el.classList.remove('show'));
-  }
+    // Admin endpoints
+    if (action === 'adminStats' || action === 'adminLogs' || action === 'adminAttendance') {
+      const token      = e.parameter.token;
+      const validToken = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
 
-  async function generateQROnClient(payload, containerId) {
-    const container = document.getElementById(containerId);
-    container.innerHTML = '';
-    container.style.border = 'none';
-
-    new QRCode(container, {
-      text: JSON.stringify(payload),
-      width: 180,
-      height: 180,
-      colorDark: "#000000",
-      colorLight: "#ffffff",
-      correctLevel: QRCode.CorrectLevel.H
-    });
-
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const canvas = container.querySelector('canvas');
-        resolve(canvas.toDataURL("image/png"));
-      }, 300);
-    });
-  }
-
-  registerForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    clearErrors();
-
-    const name = document.getElementById('fullName').value.trim();
-    const email = document.getElementById('email').value.trim();
-    const role = document.getElementById('role').value.trim();
-    const department = document.getElementById('department').value;
-
-    let hasError = false;
-    if (!name) { showError('fullName', 'Full Name is required'); hasError = true; }
-    if (!email) { showError('email', 'Email is required'); hasError = true; }
-    if (!role) { showError('role', 'Role is required'); hasError = true; }
-    if (!department) { showError('department', 'Department is required'); hasError = true; }
-
-    if (hasError) return;
-
-    submitBtn.disabled = true;
-    submitBtn.innerHTML = 'Generating... <span style="display:inline-block; animation: spin 1s linear infinite;">↻</span>';
-
-    fetch(API_URL, {
-      method: 'POST',
-      body: JSON.stringify({ action: 'register', name, email, role, department })
-    })
-    .then(res => res.json())
-    .then(regData => {
-      if (!regData.success) {
-        if (regData.code === "DUPLICATE_EMAIL") {
-          showError('email', "This email is already registered");
-        } else {
-          showToast(regData.message || "Registration failed", "error");
-        }
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Generate My ID';
-        return;
+      if (!token || token !== validToken) {
+        return respondMaybeJsonp({ error: "Unauthorized" });
       }
 
-      generatedUserId = regData.userId;
-      const payload = {
-        userId: regData.userId,
-        name: regData.name,
-        role: regData.role,
-        issued: regData.issued
-      };
+      if (action === 'adminStats')      return respondMaybeJsonp(getAdminStats());
+      if (action === 'adminLogs')       return respondMaybeJsonp(getAdminLogs());
+      if (action === 'adminAttendance') return respondMaybeJsonp(getAdminAttendance());
+    }
 
-      return generateQROnClient(payload, 'qrContainer').then(base64Str => {
-        currentQrBase64 = base64Str;
-        submitBtn.innerHTML = 'Saving to Drive... <span style="display:inline-block; animation: spin 1s linear infinite;">↻</span>';
-        
-        return fetch(API_URL, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'saveQR', userId: generatedUserId, base64Image: currentQrBase64 })
-        }).then(res => res.json()).then(saveData => {
-          if (!saveData.success) {
-            showToast("QR displayed but Drive backup failed", "warning");
-          } else {
-            showToast("ID created and QR saved to Drive", "success");
-          }
+    return respondMaybeJsonp({ success: false, message: "Unknown action" });
 
-          avatarInitials.textContent = getInitials(regData.name);
-          cardName.textContent = regData.name;
-          cardRole.textContent = `${regData.role} · ${department}`;
-          cardIdText.textContent = regData.userId;
-          
-          idCard.classList.add('show');
-          downloadBtn.disabled = false;
-          downloadBtn.title = "Download QR Code";
-          
-          submitBtn.disabled = false;
-          submitBtn.textContent = 'Generate My ID';
-        });
-      });
-    })
-    .catch(err => {
-      console.error(err);
-      showToast("Network error occurred", "error");
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Generate My ID';
-    });
+  } catch (err) {
+    // 🔥 CRITICAL FIX: JSONP-safe error handling
+    if (callback) {
+      return ContentService
+        .createTextOutput(callback + '(' + JSON.stringify({
+          success: false,
+          message: err.message
+        }) + ')')
+        .setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+
+    return respond({ success: false, message: err.message });
+  }
+}
+
+/**
+ * Handles POST requests
+ */
+function doPost(e) {
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return respond({ success: false, message: "Empty request body" });
+    }
+
+    const params = JSON.parse(e.postData.contents);
+    const action = params.action;
+
+    if (!action) {
+      return respond({ success: false, message: "Missing action" });
+    }
+
+    if (action === 'register') return respond(registerUser(params));
+    if (action === 'saveQR')   return respond(saveQRToDrive(params));
+    if (action === 'scan')     return respond(handleScan(params));
+
+    if (action === 'adminAuth') {
+      const validPassword = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
+      if (params.password === validPassword) {
+        return respond({ authorized: true, token: validPassword });
+      }
+      return respond({ authorized: false });
+    }
+
+    return respond({ success: false, message: "Unknown action" });
+
+  } catch (err) {
+    return respond({ success: false, message: err.message });
+  }
+}
+
+/**
+ * JSON response helper
+ */
+function respond(data) {
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Include HTML partials
+ */
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+/**
+ * Get Web App URL
+ */
+function getAppUrl() {
+  return ScriptApp.getService().getUrl();
+}
+
+/**
+ * Admin stats
+ */
+function getAdminStats() {
+  const usersData = getUsersSheet().getDataRange().getValues().slice(1);
+  const logsData  = getLogsSheet().getDataRange().getValues().slice(1);
+  const totalUsers = usersData.length;
+
+  const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  let scansToday = 0;
+
+  logsData.forEach(row => {
+    if (row[5]) {
+      const scanDate = Utilities.formatDate(new Date(row[5]), Session.getScriptTimeZone(), "yyyy-MM-dd");
+      if (scanDate === todayStr) scansToday++;
+    }
   });
 
-  copyBtn.addEventListener('click', () => {
-    navigator.clipboard.writeText(cardIdText.textContent).then(() => {
-      const original = copyBtn.textContent;
-      copyBtn.textContent = '✓ Copied!';
-      copyBtn.style.color = 'var(--secondary)';
-      setTimeout(() => {
-        copyBtn.textContent = original;
-        copyBtn.style.color = 'inherit';
-      }, 2000);
-    }).catch(err => console.error("Clipboard error", err));
+  let currentlyIn  = 0;
+  let currentlyOut = 0;
+
+  usersData.forEach(row => {
+    const userId  = row[0];
+    const lastLog = getLastLogForUser(userId);
+
+    if (lastLog && lastLog.status === "IN")  currentlyIn++;
+    if (lastLog && lastLog.status === "OUT") currentlyOut++;
   });
 
-  downloadBtn.addEventListener('click', () => {
-    if (!currentQrBase64 || !generatedUserId) return;
-    const link = document.createElement('a');
-    link.download = `${generatedUserId}.png`;
-    link.href = currentQrBase64;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  });
-</script>
+  return { totalUsers, scansToday, currentlyIn, currentlyOut };
+}
 
-</body>
-</html>
+/**
+ * Admin logs
+ */
+function getAdminLogs() {
+  const data = getLogsSheet().getDataRange().getValues().slice(1);
+
+  return data.slice(-50).reverse().map(row => ({
+    logId:     row[0],
+    userId:    row[1],
+    name:      row[2],
+    role:      row[3],
+    status:    row[4],
+    scannedAt: row[5]
+  }));
+}
+
+/**
+ * Admin attendance
+ */
+function getAdminAttendance() {
+  const usersData = getUsersSheet().getDataRange().getValues().slice(1);
+
+  return usersData.map(row => {
+    const userId  = row[0];
+    const lastLog = getLastLogForUser(userId);
+
+    return {
+      userId:     userId,
+      name:       row[1],
+      role:       row[3],
+      department: row[4],
+      status:     lastLog ? lastLog.status    : "NOT ARRIVED",
+      lastSeen:   lastLog ? lastLog.scannedAt : "—"
+    };
+  });
+}
+
+// Client wrappers
+
+function scanFromClient(params) {
+  return handleScan(params);
+}
+
+function registerFromClient(params) {
+  return registerUser(params);
+}
+
+function adminAuthFromClient(params) {
+  const validPassword = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
+
+  if (params.password === validPassword) {
+    return { authorized: true, token: validPassword };
+  }
+
+  return { authorized: false };
+}
+
+function getLogsFromClient() {
+  const sheet = getLogsSheet();
+  const data  = sheet.getDataRange().getValues();
+
+  return data.slice(1).slice(-20).reverse().map(row => ({
+    logId:     row[0],
+    userId:    row[1],
+    name:      row[2],
+    role:      row[3],
+    status:    row[4],
+    scannedAt: row[5]
+  }));
+}

@@ -4,6 +4,9 @@
  * @returns {Object} Result object with status
  */
 function handleScan(data) {
+  // Guard: called with no args when run directly from the editor
+  if (!data) return { status: "INVALID", message: "No scan data provided" };
+
   const { userId, name, role, issued } = data;
 
   // Step 1: Validate payload
@@ -72,4 +75,38 @@ function handleScan(data) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * Adds a test user to the Users sheet.
+ * Run this ONCE before running testHandleScan().
+ */
+function addTestUser() {
+  appendUserRow([
+    "ANT-20240101-AB12",      // userId
+    "John Doe",               // name
+    "john@example.com",       // email
+    "Employee",               // role
+    "Engineering",            // department
+    "",                       // qrDriveId
+    "",                       // qrFileUrl
+    new Date().toISOString()  // createdAt
+  ]);
+  Logger.log("Test user added successfully.");
+}
+
+/**
+ * Test function — run this from the Apps Script editor to simulate a scan.
+ * Make sure to run addTestUser() first if the Users sheet is empty.
+ */
+function testHandleScan() {
+  const mockData = {
+    userId: "ANT-20240101-AB12",
+    name:   "John Doe",
+    role:   "Employee",
+    issued: "2024-01-01"
+  };
+
+  const result = handleScan(mockData);
+  Logger.log(JSON.stringify(result));
 }
