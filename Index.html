@@ -1,245 +1,285 @@
-/**
- * Handles incoming GET requests to serve HTML pages or read data.
- */
-function doGet(e) {
-  let callback = null;
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Register for your Digital ID — EntryFlow">
+  <title>Register | EntryFlow Digital ID</title>
+  <?!= include('Style'); ?>
+</head>
+<body>
 
-  try {
-    const action = e && e.parameter && e.parameter.action;
-    callback = e && e.parameter && e.parameter.callback;
+<div class="split-layout">
 
-    function respondMaybeJsonp(data) {
-      if (callback) {
-        return ContentService
-          .createTextOutput(callback + '(' + JSON.stringify(data) + ')')
-          .setMimeType(ContentService.MimeType.JAVASCRIPT);
-      }
-      return respond(data);
-    }
+  <!-- ── Form Section ── -->
+  <div class="form-section">
+    <h1 class="title">Get your<br>Digital ID</h1>
+    <p class="subtitle">Fill in the form to generate your QR-based entry pass.</p>
 
-    // Default: serve main page
-    if (!action) {
-      return HtmlService.createTemplateFromFile('Index')
-        .evaluate()
-        .setTitle('Register | Digital ID')
-        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
-        .addMetaTag('viewport', 'width=device-width, initial-scale=1');
-    }
+    <div id="formView">
+      <div class="form-group">
+        <label for="nameInput">Full Name</label>
+        <input type="text" id="nameInput" placeholder="e.g. Akshat Pandey" autocomplete="name">
+      </div>
 
+      <div class="form-group">
+        <label for="emailInput">Email Address</label>
+        <input type="email" id="emailInput" placeholder="you@example.com" autocomplete="email">
+      </div>
 
-    if (action === 'admin') {
-      return HtmlService.createTemplateFromFile('Admin')
-        .evaluate()
-        .setTitle('Admin | Digital ID')
-        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
-        .addMetaTag('viewport', 'width=device-width, initial-scale=1');
-    }
+      <div class="form-group">
+        <label for="roleInput">Role</label>
+        <input type="text" id="roleInput" placeholder="e.g. Full Stack Engineer">
+      </div>
 
-    // API: logs
-    if (action === 'logs') {
-      const logs = getLogsFromClient();
-      return respondMaybeJsonp({ success: true, logs });
-    }
+      <div class="form-group">
+        <label for="deptInput">Department</label>
+        <select id="deptInput">
+          <option value="" disabled selected>Select department</option>
+          <option>Engineering</option>
+          <option>Marketing</option>
+          <option>Operations</option>
+          <option>HR</option>
+          <option>Finance</option>
+          <option>Design</option>
+          <option>Sales</option>
+          <option>Other</option>
+        </select>
+      </div>
 
-    // API: scan
-    if (action === 'scan') {
-      const result = handleScan({
-        userId: e.parameter.userId,
-        name:   e.parameter.name,
-        role:   e.parameter.role,
-        issued: e.parameter.issued
-      });
-      return respondMaybeJsonp(result);
-    }
+      <button class="btn-primary" id="registerBtn">Generate My ID →</button>
+      <p id="formError" style="color:var(--red);margin-top:1rem;display:none;"></p>
+    </div>
 
-    // Admin endpoints
-    if (action === 'adminStats' || action === 'adminLogs' || action === 'adminAttendance') {
-      const token      = e.parameter.token;
-      const validToken = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
+    <!-- Success message (hidden until registered) -->
+    <div id="successMsg" style="display:none;">
+      <p style="color:var(--secondary);font-weight:700;font-size:1.1rem;margin-bottom:1rem;">
+        ✓ Registration successful!
+      </p>
+      <p style="color:var(--text-muted);margin-bottom:1.5rem;font-size:0.9rem;">
+        Your QR code has been saved to Google Drive and your record is in the sheet.
+      </p>
+      <button class="btn-secondary" onclick="resetForm()">Register another person</button>
+    </div>
+  </div>
 
-      if (!token || token !== validToken) {
-        return respondMaybeJsonp({ error: "Unauthorized" });
-      }
+  <!-- ── ID Card Preview Section ── -->
+  <div class="preview-section">
+    <div class="id-card" id="idCard">
 
-      if (action === 'adminStats')      return respondMaybeJsonp(getAdminStats());
-      if (action === 'adminLogs')       return respondMaybeJsonp(getAdminLogs());
-      if (action === 'adminAttendance') return respondMaybeJsonp(getAdminAttendance());
-    }
+      <div class="avatar" id="cardAvatar">?</div>
+      <div class="card-name mono" id="cardName">Your Name</div>
+      <div class="card-role" id="cardRole">Role · Department</div>
+      <div class="card-id-text mono" id="cardId">ANT-XXXXXXXX-XXXX</div>
 
-    return respondMaybeJsonp({ success: false, message: "Unknown action" });
+      <!-- QR Box -->
+      <div class="qr-box" id="qrBox">
+        <span id="qrPlaceholderText" style="font-size:0.8rem;">QR will appear here</span>
+        <img id="qrImage" src="" alt="QR Code"
+             style="display:none; width:100%; height:100%; object-fit:contain; border-radius:8px;">
+        <div id="qrSpinner" style="display:none; flex-direction:column; align-items:center; gap:0.75rem;">
+          <div style="width:32px;height:32px;border:3px solid var(--border-color);
+                      border-top-color:var(--primary);border-radius:50%;
+                      animation:spin 0.8s linear infinite;"></div>
+          <span style="font-size:0.7rem;color:var(--text-muted);">Generating…</span>
+        </div>
+      </div>
 
-  } catch (err) {
-    // 🔥 CRITICAL FIX: JSONP-safe error handling
-    if (callback) {
-      return ContentService
-        .createTextOutput(callback + '(' + JSON.stringify({
-          success: false,
-          message: err.message
-        }) + ')')
-        .setMimeType(ContentService.MimeType.JAVASCRIPT);
-    }
+      <!-- Save status -->
+      <p id="saveStatus" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:1.5rem;display:none;"></p>
 
-    return respond({ success: false, message: err.message });
-  }
-}
+      <!-- Actions -->
+      <div class="card-actions" id="cardActions" style="display:none;">
+        <button class="btn-secondary" onclick="downloadQR()">⬇ Download</button>
+        <a id="driveLink" href="#" target="_blank" class="btn-secondary"
+           style="text-align:center;text-decoration:none;">↗ Drive</a>
+      </div>
 
-/**
- * Handles POST requests
- */
-function doPost(e) {
-  try {
-    if (!e || !e.postData || !e.postData.contents) {
-      return respond({ success: false, message: "Empty request body" });
-    }
+      <div class="card-accent-strip"></div>
+    </div>
+  </div>
+</div>
 
-    const params = JSON.parse(e.postData.contents);
-    const action = params.action;
+<!-- Spinner keyframe (also in Style.html but repeated for safety) -->
+<style>
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
 
-    if (!action) {
-      return respond({ success: false, message: "Missing action" });
-    }
-
-    if (action === 'register') return respond(registerUser(params));
-    if (action === 'saveQR')   return respond(saveQRToDrive(params));
-    if (action === 'scan')     return respond(handleScan(params));
-
-    if (action === 'adminAuth') {
-      const validPassword = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
-      if (params.password === validPassword) {
-        return respond({ authorized: true, token: validPassword });
-      }
-      return respond({ authorized: false });
-    }
-
-    return respond({ success: false, message: "Unknown action" });
-
-  } catch (err) {
-    return respond({ success: false, message: err.message });
-  }
-}
-
-/**
- * JSON response helper
- */
-function respond(data) {
-  return ContentService
-    .createTextOutput(JSON.stringify(data))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-/**
- * Include HTML partials
- */
-function include(filename) {
-  return HtmlService.createHtmlOutputFromFile(filename).getContent();
-}
-
-/**
- * Get Web App URL
- */
-function getAppUrl() {
-  return ScriptApp.getService().getUrl();
-}
-
-/**
- * Admin stats
- */
-function getAdminStats() {
-  const usersData = getUsersSheet().getDataRange().getValues().slice(1);
-  const logsData  = getLogsSheet().getDataRange().getValues().slice(1);
-  const totalUsers = usersData.length;
-
-  const todayStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
-  let scansToday = 0;
-
-  logsData.forEach(row => {
-    if (row[5]) {
-      const scanDate = Utilities.formatDate(new Date(row[5]), Session.getScriptTimeZone(), "yyyy-MM-dd");
-      if (scanDate === todayStr) scansToday++;
-    }
+<script>
+  // ── Live card preview as user types ──
+  ['nameInput','roleInput','deptInput'].forEach(id => {
+    document.getElementById(id).addEventListener('input', updateCardPreview);
   });
 
-  let currentlyIn  = 0;
-  let currentlyOut = 0;
-
-  usersData.forEach(row => {
-    const userId  = row[0];
-    const lastLog = getLastLogForUser(userId);
-
-    if (lastLog && lastLog.status === "IN")  currentlyIn++;
-    if (lastLog && lastLog.status === "OUT") currentlyOut++;
-  });
-
-  return { totalUsers, scansToday, currentlyIn, currentlyOut };
-}
-
-/**
- * Admin logs
- */
-function getAdminLogs() {
-  const data = getLogsSheet().getDataRange().getValues().slice(1);
-
-  return data.slice(-50).reverse().map(row => ({
-    logId:     row[0],
-    userId:    row[1],
-    name:      row[2],
-    role:      row[3],
-    status:    row[4],
-    scannedAt: row[5]
-  }));
-}
-
-/**
- * Admin attendance
- */
-function getAdminAttendance() {
-  const usersData = getUsersSheet().getDataRange().getValues().slice(1);
-
-  return usersData.map(row => {
-    const userId  = row[0];
-    const lastLog = getLastLogForUser(userId);
-
-    return {
-      userId:     userId,
-      name:       row[1],
-      role:       row[3],
-      department: row[4],
-      status:     lastLog ? lastLog.status    : "NOT ARRIVED",
-      lastSeen:   lastLog ? lastLog.scannedAt : "—"
-    };
-  });
-}
-
-// Client wrappers
-
-function scanFromClient(params) {
-  return handleScan(params);
-}
-
-function registerFromClient(params) {
-  return registerUser(params);
-}
-
-function adminAuthFromClient(params) {
-  const validPassword = PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
-
-  if (params.password === validPassword) {
-    return { authorized: true, token: validPassword };
+  function updateCardPreview() {
+    const name = document.getElementById('nameInput').value.trim();
+    const role = document.getElementById('roleInput').value.trim();
+    const dept = document.getElementById('deptInput').value;
+    document.getElementById('cardName').textContent = name  || 'Your Name';
+    document.getElementById('cardRole').textContent = [role, dept].filter(Boolean).join(' · ') || 'Role · Department';
+    document.getElementById('cardAvatar').textContent =
+      name ? name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase() : '?';
+    document.getElementById('idCard').classList.add('show');
   }
 
-  return { authorized: false };
-}
+  // ── Register button ──
+  document.getElementById('registerBtn').addEventListener('click', submitRegistration);
 
-function getLogsFromClient() {
-  const sheet = getLogsSheet();
-  const data  = sheet.getDataRange().getValues();
+  function submitRegistration() {
+    const name       = document.getElementById('nameInput').value.trim();
+    const email      = document.getElementById('emailInput').value.trim();
+    const role       = document.getElementById('roleInput').value.trim();
+    const department = document.getElementById('deptInput').value;
+    const errEl      = document.getElementById('formError');
 
-  return data.slice(1).slice(-20).reverse().map(row => ({
-    logId:     row[0],
-    userId:    row[1],
-    name:      row[2],
-    role:      row[3],
-    status:    row[4],
-    scannedAt: row[5]
-  }));
-}
+    errEl.style.display = 'none';
+
+    if (!name || !email || !role || !department) {
+      errEl.textContent  = 'Please fill in all fields.';
+      errEl.style.display = 'block';
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      errEl.textContent  = 'Please enter a valid email address.';
+      errEl.style.display = 'block';
+      return;
+    }
+
+    const btn = document.getElementById('registerBtn');
+    btn.disabled    = true;
+    btn.textContent = 'Registering…';
+
+    // Step 1 — Register user (creates the sheet row)
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (!result.success) {
+          errEl.textContent  = result.message || 'Registration failed.';
+          errEl.style.display = 'block';
+          btn.disabled    = false;
+          btn.textContent = 'Generate My ID →';
+          return;
+        }
+
+        // Update card with the assigned userId
+        document.getElementById('cardId').textContent = result.userId;
+
+        // Step 2 — Generate QR server-side
+        generateAndSaveQR(result);
+      })
+      .withFailureHandler(function(err) {
+        errEl.textContent  = 'Server error: ' + (err.message || err);
+        errEl.style.display = 'block';
+        btn.disabled    = false;
+        btn.textContent = 'Generate My ID →';
+      })
+      .registerFromClient({ name, email, role, department });
+  }
+
+  // ── Step 2+3: Generate QR → Save to Drive → Update sheet ──
+  function generateAndSaveQR(userInfo) {
+    const { userId, name, role, issued } = userInfo;
+
+    // Show spinner in QR box
+    document.getElementById('qrPlaceholderText').style.display = 'none';
+    document.getElementById('qrSpinner').style.display         = 'flex';
+    document.getElementById('saveStatus').style.display        = 'block';
+    document.getElementById('saveStatus').textContent          = 'Generating QR code…';
+
+    const payload = JSON.stringify({ userId, name, role, issued });
+
+    google.script.run
+      .withSuccessHandler(function(base64DataUrl) {
+        if (!base64DataUrl) {
+          document.getElementById('saveStatus').textContent = '⚠ QR generation failed.';
+          document.getElementById('qrSpinner').style.display = 'none';
+          finishRegistration(userId, null, null);
+          return;
+        }
+
+        // Show QR image on the card
+        const img     = document.getElementById('qrImage');
+        img.src       = base64DataUrl;
+        img.style.display = 'block';
+        document.getElementById('qrSpinner').style.display = 'none';
+        document.getElementById('qrBox').style.border      = 'none';
+
+        document.getElementById('saveStatus').textContent = 'Saving to Google Drive…';
+
+        // Step 3 — Save QR to Drive + update sheet columns
+        google.script.run
+          .withSuccessHandler(function(saveResult) {
+            if (saveResult && saveResult.success) {
+              document.getElementById('saveStatus').textContent = '✓ Saved to Google Drive';
+              document.getElementById('driveLink').href = saveResult.fileUrl || '#';
+              finishRegistration(userId, base64DataUrl, saveResult.fileUrl);
+            } else {
+              document.getElementById('saveStatus').textContent =
+                '⚠ Drive save failed: ' + ((saveResult && saveResult.message) || 'unknown error');
+              finishRegistration(userId, base64DataUrl, null);
+            }
+          })
+          .withFailureHandler(function(err) {
+            document.getElementById('saveStatus').textContent =
+              '⚠ Drive save error: ' + (err.message || err);
+            finishRegistration(userId, base64DataUrl, null);
+          })
+          .saveQRFromClient({ userId, base64Image: base64DataUrl });
+      })
+      .withFailureHandler(function(err) {
+        document.getElementById('qrSpinner').style.display = 'none';
+        document.getElementById('saveStatus').textContent  =
+          '⚠ QR generation error: ' + (err.message || err);
+        finishRegistration(userId, null, null);
+      })
+      .generateQRBase64(payload);
+  }
+
+  // ── Finish up UI after save ──
+  function finishRegistration(userId, base64DataUrl, driveUrl) {
+    const btn = document.getElementById('registerBtn');
+    btn.disabled    = false;
+    btn.textContent = 'Generate My ID →';
+
+    // Show card actions
+    document.getElementById('cardActions').style.display = 'flex';
+
+    // Show success message under form
+    document.getElementById('formView').style.display   = 'none';
+    document.getElementById('successMsg').style.display = 'block';
+  }
+
+  // ── Download QR ──
+  function downloadQR() {
+    const img = document.getElementById('qrImage');
+    if (!img.src || img.style.display === 'none') return;
+    const userId = document.getElementById('cardId').textContent;
+    const a      = document.createElement('a');
+    a.href       = img.src;
+    a.download   = `${userId}_QR.png`;
+    a.click();
+  }
+
+  // ── Reset form ──
+  function resetForm() {
+    ['nameInput','emailInput','roleInput'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('deptInput').value         = '';
+    document.getElementById('formView').style.display  = 'block';
+    document.getElementById('successMsg').style.display = 'none';
+    document.getElementById('cardActions').style.display = 'none';
+    document.getElementById('saveStatus').style.display  = 'none';
+    document.getElementById('qrImage').style.display     = 'none';
+    document.getElementById('qrImage').src               = '';
+    document.getElementById('qrPlaceholderText').style.display = 'block';
+    document.getElementById('qrBox').style.border        = '';
+    document.getElementById('cardName').textContent  = 'Your Name';
+    document.getElementById('cardRole').textContent  = 'Role · Department';
+    document.getElementById('cardAvatar').textContent = '?';
+    document.getElementById('cardId').textContent    = 'ANT-XXXXXXXX-XXXX';
+    document.getElementById('formError').style.display = 'none';
+  }
+</script>
+
+</body>
+</html>

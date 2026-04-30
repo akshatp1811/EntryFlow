@@ -59,8 +59,10 @@ function saveQRToDrive(params) {
     const decoded    = Utilities.base64Decode(base64Data);
     const blob       = Utilities.newBlob(decoded, 'image/png', `${userId}.png`);
 
-    // Save to Drive root (or specify a folder ID if needed)
-    const file    = DriveApp.createFile(blob);
+    // Save to the designated QR codes Drive folder
+    const QR_FOLDER_ID = '1B1U8E01vyIrdYB-JTMvh-IvF8-f-1NsY';
+    const folder  = DriveApp.getFolderById(QR_FOLDER_ID);
+    const file    = folder.createFile(blob);
     const fileId  = file.getId();
     const fileUrl = file.getUrl();
 
@@ -93,4 +95,14 @@ function generateQRBase64(jsonPayload) {
   const base64 = Utilities.base64Encode(blob.getBytes());
 
   return 'data:image/png;base64,' + base64;
+}
+
+/**
+ * Client-callable wrapper for saveQRToDrive.
+ * Called via google.script.run.saveQRFromClient(params)
+ * @param {Object} params - { userId, base64Image }
+ * @returns {Object} Result object
+ */
+function saveQRFromClient(params) {
+  return saveQRToDrive(params);
 }
